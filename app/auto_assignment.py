@@ -39,19 +39,16 @@ class AutoAssignmentSystem:
         print(f"   Required skills: {required_skills}")
         print(f"   Priority: {priority}")
         
-        # 2. Find best available agent (considering holidays)
-        current_date = datetime.now().strftime("%Y-%m-%d")
-        current_time = datetime.now().strftime("%H:%M")
-        
+        # 2. Find best available agent (MUST have matching skills, NO fallback)
+        # Only assign if agent has the required skills
         available_agents = await db_manager.get_available_agents(
-            date=current_date,
-            time=current_time,
-            skills=required_skills,
-            domain="IT"
+            skills=required_skills
         )
         
+        # If no agents with matching skills, DO NOT assign - requires human assignment
         if not available_agents:
-            print(f"⚠️  No available agents found (considering holidays) for ticket {ticket_id}")
+            print(f"⚠️  No agents found with required skills: {required_skills}")
+            print(f"   → Ticket will be marked for manual/human assignment")
             return None
         
         # Find the best agent from available agents
@@ -91,7 +88,6 @@ class AutoAssignmentSystem:
         print(f"   Skills: {best_agent.skills}")
         print(f"   Current load: {best_agent.current_load}/{best_agent.max_concurrent_tickets}")
         print(f"   Agent score: {best_score:.2f}")
-        print(f"   Holiday status: Available (not on holiday)")
         
         # 3. Assign ticket to agent
         assignment_time = datetime.utcnow()
@@ -232,6 +228,7 @@ class AutoAssignmentSystem:
     async def get_team_stats(self) -> Dict[str, any]:
         """Get team-wide statistics"""
         agents = await db_manager.get_all_agents(active_only=False)
+        all_tickets = await db_manager.get_all_tickets()
         
         if not agents:
             return {
@@ -243,9 +240,22 @@ class AutoAssignmentSystem:
                 "agents": []
             }
         
+        # Recalculate and fix negative loads
+        for agent in agents:
+            agent_tickets = [
+                t for t in all_tickets
+                if t.assigned_to and t.assigned_to.strip().lower() == agent.email.strip().lower()
+                and t.status in ["open", "in_progress", "pending"]
+            ]
+            actual_load = max(0, len(agent_tickets))  # Ensure non-negative
+            
+            if agent.current_load < 0 or agent.current_load != actual_load:
+                await db_manager.update_agent(agent.agent_id, {"current_load": actual_load})
+                agent.current_load = actual_load
+        
         active_agents = [a for a in agents if a.is_active]
         total_capacity = sum(a.max_concurrent_tickets for a in active_agents)
-        total_load = sum(a.current_load for a in active_agents)
+        total_load = sum(max(0, a.current_load) for a in active_agents)
         
         # Get individual agent stats
         agent_stats = []
@@ -260,7 +270,7 @@ class AutoAssignmentSystem:
             "total_capacity": total_capacity,
             "total_load": total_load,
             "team_utilization_percent": (total_load / total_capacity * 100) if total_capacity > 0 else 0,
-            "available_capacity": total_capacity - total_load,
+            "available_capacity": max(0, total_capacity - total_load),
             "agents": agent_stats,
             "top_performers": sorted(
                 [a for a in agent_stats if a["total_resolved"] > 0],

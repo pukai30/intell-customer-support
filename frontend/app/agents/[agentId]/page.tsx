@@ -1,8 +1,20 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useParams } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import axios from 'axios'
+import { 
+  format, 
+  startOfMonth, 
+  endOfMonth, 
+  startOfWeek, 
+  endOfWeek, 
+  eachDayOfInterval,
+  isSameMonth,
+  isToday,
+  addMonths,
+  subMonths
+} from 'date-fns'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -42,15 +54,51 @@ interface AgentHoliday {
   created_at: string
 }
 
+interface OfficialHoliday {
+  date: string
+  name: string
+  holiday_type: string
+  region: string | null
+  is_working_day: boolean
+  is_recurring: boolean
+}
+
+interface AssignedTicket {
+  ticket_id: string
+  channel: string
+  customer_identifier: string
+  subject: string
+  status: string
+  priority: string
+  created_at: string
+  assigned_at: string
+}
+
+interface AvailableAgent {
+  agent_id: string
+  name: string
+  email: string
+  current_load: number
+  max_concurrent_tickets: number
+}
+
 export default function AgentDetailsPage() {
   const params = useParams()
+  const router = useRouter()
   const agentId = params.agentId as string
   
   const [agent, setAgent] = useState<Agent | null>(null)
   const [holidays, setHolidays] = useState<AgentHoliday[]>([])
+  const [officialHolidays, setOfficialHolidays] = useState<OfficialHoliday[]>([])
+  const [assignedTickets, setAssignedTickets] = useState<AssignedTicket[]>([])
+  const [availableAgents, setAvailableAgents] = useState<AvailableAgent[]>([])
   const [loading, setLoading] = useState(true)
   const [showHolidayModal, setShowHolidayModal] = useState(false)
+  const [showCalendar, setShowCalendar] = useState(false)
+  const [showReassignModal, setShowReassignModal] = useState(false)
+  const [selectedTicket, setSelectedTicket] = useState<AssignedTicket | null>(null)
   const [selectedDate, setSelectedDate] = useState('')
+  const [currentMonth, setCurrentMonth] = useState(new Date())
   
   // Holiday form state
   const [holidayForm, setHolidayForm] = useState({
@@ -64,17 +112,38 @@ export default function AgentDetailsPage() {
     approved_by: ''
   })
 
+  // Reassignment form state
+  const [reassignForm, setReassignForm] = useState({
+    new_agent_id: '',
+    reason: ''
+  })
+
   const loadAgentData = async () => {
     try {
       setLoading(true)
-      const [agentRes, holidaysRes] = await Promise.all([
-        axios.get(`${API_URL}/api/agents/${agentId}`),
-        axios.get(`${API_URL}/api/agents/${agentId}/holidays`)
-      ])
+      const agentRes = await axios.get(`${API_URL}/api/agents/${agentId}`)
       setAgent(agentRes.data)
+      
+      console.log('Loading assigned tickets for agent:', agentRes.data.email)
+      
+      // Load other data after we have the agent
+      const [holidaysRes, officialHolidaysRes, assignedTicketsRes, agentsRes] = await Promise.all([
+        axios.get(`${API_URL}/api/agents/${agentId}/holidays`),
+        axios.get(`${API_URL}/api/holidays/list`),
+        axios.get(`${API_URL}/api/tickets/assigned/${encodeURIComponent(agentRes.data.email)}`),
+        axios.get(`${API_URL}/api/agents/list`)
+      ])
+      
+      console.log('Assigned tickets response:', assignedTicketsRes.data)
+      
       setHolidays(holidaysRes.data.holidays || [])
-    } catch (error) {
+      setOfficialHolidays(officialHolidaysRes.data.holidays || [])
+      setAssignedTickets(assignedTicketsRes.data.tickets || [])
+      setAvailableAgents(agentsRes.data.agents || [])
+    } catch (error: any) {
       console.error('Error loading agent data:', error)
+      console.error('Error details:', error.response?.data)
+      alert(`Error loading data: ${error.response?.data?.detail || error.message}`)
     } finally {
       setLoading(false)
     }
@@ -122,6 +191,33 @@ export default function AgentDetailsPage() {
     }
   }
 
+  const handleReassignTicket = async () => {
+    if (!selectedTicket || !reassignForm.new_agent_id) {
+      alert('Please select a new agent')
+      return
+    }
+    
+    try {
+      await axios.post(`${API_URL}/api/tickets/${selectedTicket.ticket_id}/reassign`, {
+        ticket_id: selectedTicket.ticket_id,
+        new_agent_id: reassignForm.new_agent_id,
+        reason: reassignForm.reason
+      })
+      alert('Ticket reassigned successfully!')
+      setShowReassignModal(false)
+      setSelectedTicket(null)
+      setReassignForm({ new_agent_id: '', reason: '' })
+      loadAgentData()
+    } catch (error: any) {
+      alert(`Error: ${error.response?.data?.detail || error.message}`)
+    }
+  }
+
+  const openReassignModal = (ticket: AssignedTicket) => {
+    setSelectedTicket(ticket)
+    setShowReassignModal(true)
+  }
+
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('en-US', {
       year: 'numeric',
@@ -149,6 +245,80 @@ export default function AgentDetailsPage() {
       default: return 'bg-gray-100 text-gray-800'
     }
   }
+
+  const getStatusColor = (status: string) => {
+    switch (status.toLowerCase()) {
+      case 'open': return 'bg-yellow-100 text-yellow-800'
+      case 'in_progress': return 'bg-blue-100 text-blue-800'
+      case 'resolved': return 'bg-green-100 text-green-800'
+      case 'closed': return 'bg-gray-100 text-gray-800'
+      default: return 'bg-gray-100 text-gray-800'
+    }
+  }
+
+  const getPriorityColor = (priority: string) => {
+    switch (priority.toLowerCase()) {
+      case 'high': return 'bg-red-100 text-red-800'
+      case 'medium': return 'bg-yellow-100 text-yellow-800'
+      case 'low': return 'bg-green-100 text-green-800'
+      default: return 'bg-gray-100 text-gray-800'
+    }
+  }
+
+  // Calendar helper functions
+  const isWeekend = (date: Date) => {
+    const day = date.getDay()
+    return day === 0 || day === 6 // Sunday or Saturday
+  }
+
+  const isNationalHoliday = (date: Date) => {
+    const dateStr = format(date, 'yyyy-MM-dd')
+    return officialHolidays.some(h => h.date === dateStr && h.holiday_type === 'national')
+  }
+
+  const isPersonalHoliday = (date: Date) => {
+    const dateStr = format(date, 'yyyy-MM-dd')
+    return holidays.some(h => h.date === dateStr)
+  }
+
+  const getDateCellClass = (date: Date) => {
+    if (isToday(date)) {
+      return 'bg-blue-500 text-white font-bold'
+    }
+    if (isWeekend(date) || isNationalHoliday(date)) {
+      return 'bg-red-100 text-red-800 font-medium'
+    }
+    if (isPersonalHoliday(date)) {
+      return 'bg-gray-300 text-gray-700'
+    }
+    return 'bg-white text-gray-900 hover:bg-gray-100'
+  }
+
+  const getCalendarDays = () => {
+    const monthStart = startOfMonth(currentMonth)
+    const monthEnd = endOfMonth(currentMonth)
+    const calendarStart = startOfWeek(monthStart)
+    const calendarEnd = endOfWeek(monthEnd)
+    
+    return eachDayOfInterval({ start: calendarStart, end: calendarEnd })
+  }
+
+  const handleCalendarNavigation = (direction: 'prev' | 'next') => {
+    setCurrentMonth(direction === 'prev' ? subMonths(currentMonth, 1) : addMonths(currentMonth, 1))
+  }
+
+  const handleOpenCalendar = () => {
+    setCurrentMonth(new Date()) // Set to today's month
+    setShowCalendar(true)
+  }
+
+  // Tabular structure for agent information - only Name, Email, Current Load, Channels
+  const agentDetails = agent ? [
+    { label: 'Name', value: agent.name },
+    { label: 'Email', value: agent.email },
+    { label: 'Current Load', value: `${agent.current_load}/${agent.max_concurrent_tickets}` },
+    { label: 'Channels', value: agent.channels.join(', ') }
+  ] : []
 
   if (loading) {
     return (
@@ -178,120 +348,193 @@ export default function AgentDetailsPage() {
         <div className="mb-8">
           <div className="flex items-center justify-between">
             <div>
+              <button 
+                onClick={() => router.push('/agents')}
+                className="text-primary-600 hover:text-primary-700 mb-2 text-sm font-medium"
+              >
+                ← Back to Agents
+              </button>
               <h1 className="text-3xl font-bold text-gray-900">👤 Agent Details</h1>
-              <p className="text-gray-600 mt-2">Manage agent information and holiday calendar</p>
+              <p className="text-gray-600 mt-2">Comprehensive agent information and management</p>
             </div>
-            <button
-              onClick={() => setShowHolidayModal(true)}
-              className="px-6 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors font-medium"
-            >
-              ➕ Add Holiday
-            </button>
+            <div className="flex gap-3">
+              <button
+                onClick={handleOpenCalendar}
+                className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium flex items-center gap-2"
+              >
+                📅 View Calendar
+              </button>
+              <button
+                onClick={() => setShowHolidayModal(true)}
+                className="px-6 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors font-medium flex items-center gap-2"
+              >
+                ➕ Add Holiday
+              </button>
+            </div>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Agent Information */}
-          <div className="lg:col-span-2">
-            <div className="bg-white rounded-lg shadow p-6 mb-6">
-              <h2 className="text-xl font-bold text-gray-900 mb-4">Agent Information</h2>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <h3 className="font-medium text-gray-900 mb-2">Basic Details</h3>
-                  <div className="space-y-2 text-sm">
-                    <p><span className="font-medium">Name:</span> {agent.name}</p>
-                    <p><span className="font-medium">Email:</span> {agent.email}</p>
-                    <p><span className="font-medium">Agent ID:</span> {agent.agent_id}</p>
-                    <p><span className="font-medium">Domain:</span> {agent.domain}</p>
-                    <p><span className="font-medium">Status:</span> 
-                      <span className={`ml-2 px-2 py-1 rounded-full text-xs font-medium ${
-                        agent.is_active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                      }`}>
-                        {agent.is_active ? 'Active' : 'Inactive'}
-                      </span>
-                    </p>
-                  </div>
-                </div>
-                
-                <div>
-                  <h3 className="font-medium text-gray-900 mb-2">Work Details</h3>
-                  <div className="space-y-2 text-sm">
-                    <p><span className="font-medium">Tier:</span> 
-                      <span className={`ml-2 px-2 py-1 rounded-full text-xs font-medium ${getTierColor(agent.tier)}`}>
-                        L{agent.tier}
-                      </span>
-                    </p>
-                    <p><span className="font-medium">Current Load:</span> {agent.current_load}/{agent.max_concurrent_tickets}</p>
-                    <p><span className="font-medium">Total Assigned:</span> {agent.total_assigned}</p>
-                    <p><span className="font-medium">Total Resolved:</span> {agent.total_resolved}</p>
-                    <p><span className="font-medium">Avg Resolution:</span> {agent.avg_resolution_time_minutes}min</p>
-                  </div>
-                </div>
-              </div>
-              
-              <div className="mt-6">
-                <h3 className="font-medium text-gray-900 mb-2">Skills</h3>
-                <div className="flex flex-wrap gap-2">
-                  {agent.skills.map((skill) => (
-                    <span key={skill} className="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm">
-                      {skill} ({agent.skill_levels[skill] || 'beginner'})
-                    </span>
-                  ))}
-                </div>
-              </div>
-              
-              <div className="mt-6">
-                <h3 className="font-medium text-gray-900 mb-2">Channels & Schedule</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                  <div>
-                    <p><span className="font-medium">Channels:</span> {agent.channels.join(', ')}</p>
-                    <p><span className="font-medium">Shift:</span> {agent.shift_start} - {agent.shift_end}</p>
-                  </div>
-                  <div>
-                    <p><span className="font-medium">Timezone:</span> {agent.timezone}</p>
-                    <p><span className="font-medium">Handles Escalations:</span> {agent.handles_escalations ? 'Yes' : 'No'}</p>
-                  </div>
-                </div>
-              </div>
+        {/* Agent Information Table */}
+        <div className="bg-white rounded-lg shadow mb-6">
+          <div className="px-6 py-4 border-b border-gray-200">
+            <h2 className="text-xl font-bold text-gray-900">Agent Information</h2>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <tbody className="divide-y divide-gray-200">
+                {agentDetails.map((detail, index) => (
+                  <tr key={index} className="hover:bg-gray-50">
+                    <td className="px-6 py-4 text-sm font-medium text-gray-700 w-1/3">
+                      {detail.label}
+                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-900">
+                      <span>{detail.value}</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Skills Section */}
+        <div className="bg-white rounded-lg shadow mb-6">
+          <div className="px-6 py-4 border-b border-gray-200">
+            <h2 className="text-xl font-bold text-gray-900">Skills</h2>
+          </div>
+          <div className="px-6 py-4">
+            <div className="flex flex-wrap gap-2">
+              {agent.skills.map((skill) => (
+                <span key={skill} className="px-3 py-2 bg-blue-100 text-blue-800 rounded-lg text-sm font-medium">
+                  {skill} <span className="text-xs opacity-75">({agent.skill_levels[skill] || 'beginner'})</span>
+                </span>
+              ))}
             </div>
           </div>
+        </div>
 
-          {/* Holiday Calendar */}
-          <div className="lg:col-span-1">
-            <div className="bg-white rounded-lg shadow p-6">
-              <h2 className="text-xl font-bold text-gray-900 mb-4">📅 Holiday Calendar</h2>
-              
+        {/* Assigned Issues Table */}
+        <div className="bg-white rounded-lg shadow mb-6">
+          <div className="px-6 py-4 border-b border-gray-200">
+            <h2 className="text-xl font-bold text-gray-900">📋 Assigned Issues</h2>
+            <p className="text-sm text-gray-600 mt-1">Tickets currently assigned to this agent</p>
+          </div>
+          <div className="overflow-x-auto">
+            {assignedTickets.length === 0 ? (
+              <div className="p-8 text-center text-gray-500">
+                <p className="text-lg">No assigned tickets</p>
+                <p className="text-sm mt-2">This agent has no active ticket assignments</p>
+              </div>
+            ) : (
+              <table className="w-full">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ticket ID</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Subject</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Customer</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Channel</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Priority</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Assigned</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {assignedTickets.map((ticket) => (
+                    <tr key={ticket.ticket_id} className="hover:bg-gray-50">
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                        {ticket.ticket_id}
+                      </td>
+                      <td className="px-6 py-4 text-sm text-gray-900 max-w-xs truncate" title={ticket.subject}>
+                        {ticket.subject}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {ticket.customer_identifier}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        <span className="inline-flex px-2 py-1 text-xs font-medium bg-gray-100 text-gray-800 rounded-full">
+                          {ticket.channel}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${getStatusColor(ticket.status)}`}>
+                          {ticket.status}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${getPriorityColor(ticket.priority)}`}>
+                          {ticket.priority}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {formatDate(ticket.assigned_at)}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                        <button
+                          onClick={() => openReassignModal(ticket)}
+                          className="text-primary-600 hover:text-primary-900 bg-primary-50 hover:bg-primary-100 px-3 py-1 rounded-md text-xs font-medium transition-colors"
+                        >
+                          Reassign
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+
+        {/* Agent Holidays */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="bg-white rounded-lg shadow">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <h2 className="text-xl font-bold text-gray-900">📅 Personal Holidays & Leaves</h2>
+            </div>
+            <div className="p-6">
               {holidays.length === 0 ? (
-                <p className="text-gray-500 text-sm">No holidays scheduled</p>
+                <p className="text-gray-500 text-sm text-center py-8">No personal holidays scheduled</p>
               ) : (
-                <div className="space-y-3">
+                <div className="space-y-3 max-h-96 overflow-y-auto">
                   {holidays.map((holiday) => (
-                    <div key={holiday.id} className="border border-gray-200 rounded-lg p-3">
-                      <div className="flex items-center justify-between mb-2">
-                        <h3 className="font-medium text-gray-900 text-sm">{holiday.name}</h3>
+                    <div key={holiday.id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="font-semibold text-gray-900">{holiday.name}</h3>
                         <button
                           onClick={() => handleDeleteHoliday(holiday.id)}
-                          className="text-red-600 hover:text-red-800 text-xs"
+                          className="text-red-600 hover:text-red-800 text-sm font-medium"
                         >
-                          Delete
+                          🗑️ Delete
                         </button>
                       </div>
-                      <div className="text-xs text-gray-600 space-y-1">
-                        <p><span className="font-medium">Date:</span> {formatDate(holiday.date)}</p>
-                        <p><span className="font-medium">Type:</span> 
-                          <span className={`ml-1 px-2 py-0.5 rounded text-xs font-medium ${getLeaveTypeColor(holiday.leave_type)}`}>
+                      <div className="space-y-1.5 text-sm">
+                        <div className="flex items-center">
+                          <span className="font-medium text-gray-600 w-24">Date:</span>
+                          <span className="text-gray-900">{formatDate(holiday.date)}</span>
+                        </div>
+                        <div className="flex items-center">
+                          <span className="font-medium text-gray-600 w-24">Type:</span>
+                          <span className={`px-2 py-1 rounded text-xs font-medium ${getLeaveTypeColor(holiday.leave_type)}`}>
                             {holiday.leave_type}
                           </span>
-                        </p>
+                        </div>
                         {holiday.start_time && holiday.end_time && (
-                          <p><span className="font-medium">Time:</span> {holiday.start_time} - {holiday.end_time}</p>
+                          <div className="flex items-center">
+                            <span className="font-medium text-gray-600 w-24">Time:</span>
+                            <span className="text-gray-900">{holiday.start_time} - {holiday.end_time}</span>
+                          </div>
                         )}
                         {holiday.reason && (
-                          <p><span className="font-medium">Reason:</span> {holiday.reason}</p>
+                          <div className="flex items-start">
+                            <span className="font-medium text-gray-600 w-24">Reason:</span>
+                            <span className="text-gray-900 flex-1">{holiday.reason}</span>
+                          </div>
                         )}
                         {holiday.approved_by && (
-                          <p><span className="font-medium">Approved by:</span> {holiday.approved_by}</p>
+                          <div className="flex items-center">
+                            <span className="font-medium text-gray-600 w-24">Approved by:</span>
+                            <span className="text-gray-900">{holiday.approved_by}</span>
+                          </div>
                         )}
                       </div>
                     </div>
@@ -300,7 +543,130 @@ export default function AgentDetailsPage() {
               )}
             </div>
           </div>
+
+          <div className="bg-white rounded-lg shadow">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <h2 className="text-xl font-bold text-gray-900">🏛️ Official Holidays</h2>
+            </div>
+            <div className="p-6">
+              {officialHolidays.length === 0 ? (
+                <p className="text-gray-500 text-sm text-center py-8">No official holidays loaded</p>
+              ) : (
+                <div className="space-y-2 max-h-96 overflow-y-auto">
+                  {officialHolidays.map((holiday, index) => (
+                    <div key={index} className="border border-gray-200 rounded-lg p-3 hover:bg-gray-50 transition-colors">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="font-medium text-gray-900 text-sm">{holiday.name}</p>
+                          <p className="text-xs text-gray-600">{holiday.date} • {holiday.holiday_type}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
+
+        {/* Calendar Modal */}
+        {showCalendar && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+              <div className="px-6 py-4 border-b flex items-center justify-between">
+                <h2 className="text-2xl font-bold text-gray-900">📅 Holiday Calendar</h2>
+                <button
+                  onClick={() => setShowCalendar(false)}
+                  className="text-gray-500 hover:text-gray-700 text-2xl font-bold"
+                >
+                  ×
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-6">
+                {/* Calendar Navigation */}
+                <div className="flex items-center justify-between mb-6">
+                  <button
+                    onClick={() => handleCalendarNavigation('prev')}
+                    className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 transition-colors"
+                  >
+                    ← Previous
+                  </button>
+                  <h3 className="text-xl font-bold text-gray-900">
+                    {format(currentMonth, 'MMMM yyyy')}
+                  </h3>
+                  <button
+                    onClick={() => handleCalendarNavigation('next')}
+                    className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 transition-colors"
+                  >
+                    Next →
+                  </button>
+                </div>
+
+                {/* Calendar Grid */}
+                <div className="grid grid-cols-7 gap-1 mb-4">
+                  {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
+                    <div key={day} className="text-center font-semibold text-gray-700 py-2">
+                      {day}
+                    </div>
+                  ))}
+                  
+                  {getCalendarDays().map((day, idx) => {
+                    const dateStr = format(day, 'yyyy-MM-dd')
+                    const dayHoliday = officialHolidays.find(h => h.date === dateStr)
+                    const personalHoliday = holidays.find(h => h.date === dateStr)
+                    
+                    return (
+                      <div
+                        key={idx}
+                        className={`aspect-square flex flex-col items-center justify-center text-sm rounded-lg transition-all ${
+                          !isSameMonth(day, currentMonth) ? 'text-gray-400' : getDateCellClass(day)
+                        }`}
+                      >
+                        <span>{format(day, 'd')}</span>
+                        {(dayHoliday || personalHoliday) && (
+                          <span className="text-xs mt-1 px-1 py-0.5 bg-white bg-opacity-50 rounded truncate w-full text-center">
+                            {dayHoliday ? dayHoliday.name : personalHoliday?.name}
+                          </span>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+
+                {/* Legend */}
+                <div className="mt-6 border-t pt-4">
+                  <h4 className="font-semibold text-gray-900 mb-3">Legend:</h4>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 bg-blue-500 rounded"></div>
+                      <span>Today</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 bg-red-100 rounded"></div>
+                      <span>Weekend/Holiday</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 bg-gray-300 rounded"></div>
+                      <span>Personal Leave</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 bg-white border rounded"></div>
+                      <span>Work Day</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="px-6 py-4 border-t bg-gray-50 flex justify-end">
+                <button
+                  onClick={() => setShowCalendar(false)}
+                  className="px-6 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 transition-colors"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Add Holiday Modal */}
         {showHolidayModal && (
@@ -426,6 +792,89 @@ export default function AgentDetailsPage() {
                   className="px-6 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors"
                 >
                   Add Holiday
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Reassignment Modal */}
+        {showReassignModal && selectedTicket && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-lg max-w-md w-full max-h-[90vh] overflow-y-auto">
+              <div className="p-6 border-b">
+                <h2 className="text-2xl font-bold text-gray-900">Reassign Ticket</h2>
+                <p className="text-sm text-gray-600 mt-1">Ticket: {selectedTicket.ticket_id}</p>
+              </div>
+              <div className="p-6 space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Select New Agent *
+                  </label>
+                  <select
+                    value={reassignForm.new_agent_id}
+                    onChange={(e) => setReassignForm({...reassignForm, new_agent_id: e.target.value})}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                    required
+                  >
+                    <option value="">Choose an agent...</option>
+                    {availableAgents
+                      .filter(agent => agent.agent_id !== agentId) // Exclude current agent
+                      .map((agent) => (
+                        <option key={agent.agent_id} value={agent.agent_id}>
+                          {agent.name} ({agent.email}) - Load: {agent.current_load}/{agent.max_concurrent_tickets}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Reason for Reassignment (Optional)
+                  </label>
+                  <textarea
+                    value={reassignForm.reason}
+                    onChange={(e) => setReassignForm({...reassignForm, reason: e.target.value})}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                    rows={3}
+                    placeholder="Reason for reassignment..."
+                  />
+                </div>
+
+                <div className="bg-blue-50 p-4 rounded-lg">
+                  <h3 className="font-medium text-blue-900 mb-2">Ticket Details:</h3>
+                  <div className="text-sm text-blue-800 space-y-1">
+                    <p><span className="font-medium">Subject:</span> {selectedTicket.subject}</p>
+                    <p><span className="font-medium">Customer:</span> {selectedTicket.customer_identifier}</p>
+                    <p><span className="font-medium">Status:</span> 
+                      <span className={`ml-1 px-2 py-0.5 rounded text-xs font-medium ${getStatusColor(selectedTicket.status)}`}>
+                        {selectedTicket.status}
+                      </span>
+                    </p>
+                    <p><span className="font-medium">Priority:</span> 
+                      <span className={`ml-1 px-2 py-0.5 rounded text-xs font-medium ${getPriorityColor(selectedTicket.priority)}`}>
+                        {selectedTicket.priority}
+                      </span>
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="p-6 border-t flex justify-end space-x-3">
+                <button
+                  onClick={() => {
+                    setShowReassignModal(false)
+                    setSelectedTicket(null)
+                    setReassignForm({ new_agent_id: '', reason: '' })
+                  }}
+                  className="px-6 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleReassignTicket}
+                  className="px-6 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors"
+                >
+                  Reassign Ticket
                 </button>
               </div>
             </div>

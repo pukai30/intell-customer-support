@@ -21,6 +21,8 @@ interface KnowledgeDocument {
   created_at: string
   updated_at: string
   content_preview: string
+  is_embedded?: boolean
+  chunk_count?: number
 }
 
 export default function KnowledgeBasePage() {
@@ -73,6 +75,53 @@ export default function KnowledgeBasePage() {
     }
   }
 
+  const handleReEmbed = async (id: string, title: string) => {
+    if (!confirm(`Re-embed "${title}" in vector store?`)) return
+
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/knowledge/${id}/re-embed`, {
+        method: 'POST'
+      })
+      const result = await response.json()
+      
+      if (result.status === 'success') {
+        alert(`Document re-embedded successfully! ${result.chunks_created} chunks created.`)
+        loadDocuments()
+      } else {
+        alert('Failed to re-embed document')
+      }
+    } catch (error) {
+      console.error('Error re-embedding document:', error)
+      alert('Failed to re-embed document')
+    }
+  }
+
+  const handleBatchReEmbed = async () => {
+    if (!confirm('Re-embed all documents in vector store? This may take a while.')) return
+
+    try {
+      const docIds = documents.map(doc => doc.id)
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/knowledge/batch-re-embed`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(docIds)
+      })
+      const result = await response.json()
+      
+      if (result.status === 'success') {
+        alert(`Batch re-embed complete: ${result.success}/${result.total} documents successful`)
+        loadDocuments()
+      } else {
+        alert('Failed to batch re-embed documents')
+      }
+    } catch (error) {
+      console.error('Error batch re-embedding:', error)
+      alert('Failed to batch re-embed documents')
+    }
+  }
+
   const handleUploadSuccess = () => {
     setIsUploadModalOpen(false)
     loadDocuments()
@@ -110,6 +159,12 @@ export default function KnowledgeBasePage() {
             className="bg-primary-600 hover:bg-primary-700 text-white px-6 py-2 rounded-lg font-medium transition-colors flex items-center gap-2"
           >
             <span>📤</span> Upload File
+          </button>
+          <button
+            onClick={handleBatchReEmbed}
+            className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-2 rounded-lg font-medium transition-colors flex items-center gap-2"
+          >
+            <span>🔄</span> Re-embed All
           </button>
         </div>
       </div>
@@ -170,6 +225,9 @@ export default function KnowledgeBasePage() {
                     Created
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Vector Store
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Status
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -217,6 +275,22 @@ export default function KnowledgeBasePage() {
                       <div className="text-xs text-gray-400">{format(new Date(doc.created_at), 'HH:mm')}</div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
+                      {doc.is_embedded ? (
+                        <div className="flex flex-col gap-1">
+                          <span className="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
+                            ✓ Embedded
+                          </span>
+                          {doc.chunk_count && (
+                            <span className="text-xs text-gray-500">{doc.chunk_count} chunks</span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">
+                          Not Embedded
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
                       {doc.is_temporary ? (
                         <span className="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-yellow-100 text-yellow-800">
                           Temporary
@@ -234,14 +308,21 @@ export default function KnowledgeBasePage() {
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                       <div className="flex gap-2">
                         <button
+                          onClick={() => handleReEmbed(doc.id, doc.title)}
+                          className="text-purple-600 hover:text-purple-900 bg-purple-50 hover:bg-purple-100 px-3 py-1 rounded-md transition-colors"
+                          title="Re-embed in vector store"
+                        >
+                          🔄 Re-embed
+                        </button>
+                        <button
                           onClick={() => setEditingDocument(doc)}
-                          className="text-primary-600 hover:text-primary-900"
+                          className="text-primary-600 hover:text-primary-900 bg-blue-50 hover:bg-blue-100 px-3 py-1 rounded-md transition-colors"
                         >
                           ✏️ Edit
                         </button>
                         <button
                           onClick={() => handleDelete(doc.id, doc.title)}
-                          className="text-red-600 hover:text-red-900"
+                          className="text-red-600 hover:text-red-900 bg-red-50 hover:bg-red-100 px-3 py-1 rounded-md transition-colors"
                         >
                           🗑️ Delete
                         </button>

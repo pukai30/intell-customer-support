@@ -8,90 +8,73 @@ export default function Navbar() {
 
   const isActive = (path: string) => {
     return pathname === path
-      ? 'bg-primary-700 text-white'
-      : 'text-gray-300 hover:bg-primary-600 hover:text-white'
+      ? 'bg-white text-primary-600 shadow-md'
+      : 'text-slate-700 hover:bg-white/50 hover:text-primary-600'
   }
 
   return (
-    <nav className="bg-primary-800 shadow-lg">
-      <div className="container mx-auto px-4">
-        <div className="flex items-center justify-between h-16">
-          <div className="flex items-center">
-            <Link href="/" className="text-white text-xl font-bold">
-              🤖 IT Support
+    <nav className="bg-gradient-to-r from-blue-600 via-blue-700 to-indigo-700 shadow-xl border-b-4 border-blue-500">
+      <div className="container mx-auto px-4 md:px-6">
+        <div className="flex items-center justify-between h-20">
+          <div className="flex items-center space-x-3">
+            <div className="bg-white rounded-lg p-2 shadow-lg">
+              <span className="text-2xl">🤖</span>
+            </div>
+            <Link href="/" className="text-white text-2xl font-bold tracking-tight hover:text-blue-100 transition-colors">
+              Intelligent Support
             </Link>
           </div>
           
-          <div className="flex space-x-4">
+          <div className="hidden md:flex items-center space-x-2">
             <Link
               href="/knowledge-base"
-              className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${isActive('/knowledge-base')}`}
+              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${isActive('/knowledge-base')}`}
             >
               📚 Knowledge Base
             </Link>
             <Link
               href="/tickets"
-              className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${isActive('/tickets')}`}
+              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${isActive('/tickets')}`}
             >
               🎫 Tickets
             </Link>
             <Link
               href="/agents"
-              className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${isActive('/agents')}`}
+              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${isActive('/agents')}`}
             >
               👥 Agents
             </Link>
-            <Link
+            {/* SLA Dashboard - Commented out */}
+            {/* <Link
               href="/sla-dashboard"
-              className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${isActive('/sla-dashboard')}`}
+              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${isActive('/sla-dashboard')}`}
             >
-              📊 SLA
-            </Link>
-            <Link
+              📊 SLA Dashboard
+            </Link> */}
+            {/* SLA Management - Commented out */}
+            {/* <Link
               href="/sla-management"
-              className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${isActive('/sla-management')}`}
+              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${isActive('/sla-management')}`}
             >
               ⚙️ SLA Config
+            </Link> */}
+            <Link
+              href="/settings"
+              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${isActive('/settings')}`}
+            >
+              ⚙️ Settings
             </Link>
           </div>
+
+          {/* Mobile menu button */}
+          <button className="md:hidden text-white hover:text-blue-100 p-2">
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
         </div>
       </div>
     </nav>
   )
 }
-
-{/* 
-  AIRLINE SUPPORT FEATURES (COMMENTED OUT)
-  
-  To enable airline support, uncomment the code below and replace the navbar above:
-
-  import { useState } from 'react'
-  
-  // Add to component:
-  const [domain, setDomain] = useState<'IT' | 'AIRLINE'>('IT')
-  const isDomainIT = domain === 'IT'
-  const isDomainAirline = domain === 'AIRLINE'
-  
-  // Domain Switcher (add after brand):
-  <div className="flex items-center space-x-2 ml-6">
-    <button onClick={() => setDomain('IT')} className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${isDomainIT ? 'bg-white text-primary-800 shadow-md' : 'bg-primary-700 text-gray-300 hover:bg-primary-600'}`}>
-      🖥️ IT
-    </button>
-    <button onClick={() => setDomain('AIRLINE')} className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${isDomainAirline ? 'bg-white text-blue-800 shadow-md' : 'bg-blue-700 text-gray-300 hover:bg-blue-600'}`}>
-      ✈️ Airline
-    </button>
-  </div>
-  
-  // Airline Links (add before SLA Dashboard):
-  {isDomainAirline && (
-    <>
-      <Link href="/bookings" className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${isActive('/bookings')}`}>
-        📋 Bookings
-      </Link>
-      <Link href="/flights" className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${isActive('/flights')}`}>
-        ✈️ Flights
-      </Link>
-    </>
-  )}
-*/}
 

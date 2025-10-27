@@ -118,6 +118,22 @@ export const ticketsAPI = {
     const response = await api.get(`/api/tickets/assigned/${agentEmail}`)
     return response.data
   },
+
+  // Reassign ticket to different agent
+  reassign: async (ticketId: string, newAgentId: string, reason?: string) => {
+    const response = await api.post(`/api/tickets/${ticketId}/reassign`, {
+      ticket_id: ticketId,
+      new_agent_id: newAgentId,
+      reason: reason
+    })
+    return response.data
+  },
+
+  // Check WhatsApp messages on-demand
+  checkWhatsApp: async () => {
+    const response = await api.post('/api/whatsapp/check-messages')
+    return response.data
+  },
 }
 
 // Notifications API
@@ -197,80 +213,75 @@ export const statsAPI = {
   },
 }
 
-// Booking API (Airline Support) - COMMENTED OUT
-/*
-export const bookingsAPI = {
-  // Create booking
-  create: async (data: {
-    booking_reference: string
-    customer_email: string
-    customer_name: string
-    customer_phone?: string
-    flight_number: string
-    origin: string
-    destination: string
-    departure_date: string
-    arrival_date: string
-    booking_class?: string
-    seat_number?: string
-    ticket_price: number
-    passengers?: any[]
-    special_requests?: string
+// Configuration API
+export const configAPI = {
+  // Get system configuration
+  get: async () => {
+    const response = await api.get('/api/config')
+    return response.data
+  },
+
+  // Update system configuration
+  update: async (data: {
+    support_email: string
+    email_host?: string
+    email_port?: number
+    email_user?: string
+    email_password?: string
+    sms_enabled?: boolean
+    sms_phone_number?: string
+    twilio_account_sid?: string
+    twilio_auth_token?: string
+    twilio_phone_number?: string
+    whatsapp_enabled?: boolean
+    whatsapp_number?: string
+    chat_enabled?: boolean
   }) => {
-    const response = await api.post('/api/bookings/create', data)
+    const response = await api.put('/api/config', data)
     return response.data
   },
 
-  // Get booking by reference
-  get: async (bookingReference: string) => {
-    const response = await api.get(`/api/bookings/${bookingReference}`)
+  // Enhanced Configuration APIs
+  getEnhanced: async () => {
+    const response = await api.get('/api/config/enhanced')
     return response.data
   },
 
-  // Get customer bookings
-  getByCustomer: async (customerEmail: string) => {
-    const response = await api.get(`/api/bookings/customer/${customerEmail}`)
+  getSection: async (section: string) => {
+    const response = await api.get(`/api/config/${section}`)
     return response.data
   },
 
-  // Update booking
-  update: async (bookingReference: string, data: any) => {
-    const response = await api.put(`/api/bookings/${bookingReference}`, data)
+  updateEmail: async (data: any) => {
+    const response = await api.put('/api/config/email', data)
+    return response.data
+  },
+
+  updateWhatsApp: async (data: any) => {
+    const response = await api.put('/api/config/whatsapp', data)
+    return response.data
+  },
+
+  updateSMS: async (data: any) => {
+    const response = await api.put('/api/config/sms', data)
+    return response.data
+  },
+
+  updateModel: async (data: any) => {
+    const response = await api.put('/api/config/model', data)
+    return response.data
+  },
+
+  updateVectorDB: async (data: any) => {
+    const response = await api.put('/api/config/vector-db', data)
+    return response.data
+  },
+
+  updateKnowledgeProvider: async (data: any) => {
+    const response = await api.put('/api/config/knowledge-provider', data)
     return response.data
   },
 }
-
-// Flight API (Airline Support)
-export const flightsAPI = {
-  // Create flight route
-  create: async (data: {
-    flight_number: string
-    airline: string
-    origin: string
-    destination: string
-    departure_time: string
-    arrival_time: string
-    duration_minutes: number
-    aircraft_type?: string
-    days_of_operation?: string[]
-  }) => {
-    const response = await api.post('/api/flights/create', data)
-    return response.data
-  },
-
-  // Get flight by number
-  get: async (flightNumber: string) => {
-    const response = await api.get(`/api/flights/${flightNumber}`)
-    return response.data
-  },
-
-  // Search flights
-  search: async (params?: { origin?: string; destination?: string }) => {
-    const response = await api.get('/api/flights/search', { params })
-    return response.data
-  },
-}
-*/
 
 // SLA API
 export const slaAPI = {

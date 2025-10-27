@@ -79,12 +79,6 @@ class SupportTicket(BaseModel):
     escalated_at: Optional[datetime] = None  # When last escalated
     escalated_to: Optional[str] = None  # Agent email ticket was escalated to
     
-    # Support domain (IT or Airline)
-    support_domain: str = "IT"  # 'IT' or 'AIRLINE'
-    
-    # Airline-specific fields
-    booking_reference: Optional[str] = None  # PNR/Booking reference
-    flight_number: Optional[str] = None  # Flight number if applicable
     
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
@@ -119,7 +113,6 @@ class KnowledgeDocument(BaseModel):
     
     # Priority for knowledge retrieval (higher number = higher priority)
     priority: int = 1  # 1=normal, 2=high, 3=critical (temporary high-priority KB)
-    domain: str = "IT"  # 'IT' or 'AIRLINE' - support domain
     
     metadata: Optional[Dict[str, Any]] = None
 
@@ -151,63 +144,12 @@ class Agent(BaseModel):
     # Escalation tier/level (0=L1/junior, 1=L2/senior, 2=L3/expert, 3=L4/manager)
     tier: int = 0  # Agent tier for escalation matrix
     handles_escalations: bool = False  # Can handle escalated tickets
-    domain: str = "IT"  # 'IT' or 'AIRLINE' support domain
     
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     last_assigned_at: Optional[datetime] = None
     metadata: Optional[Dict[str, Any]] = None
 
-    model_config = ConfigDict(
-        populate_by_name=True,
-        arbitrary_types_allowed=True
-    )
-
-
-class FlightRoute(BaseModel):
-    """Flight route information model"""
-    id: Optional[PyObjectId] = Field(alias="_id", default=None)
-    flight_number: str  # e.g., "AA123"
-    airline: str  # Airline name
-    origin: str  # Origin airport code (e.g., "JFK")
-    destination: str  # Destination airport code (e.g., "LAX")
-    departure_time: str  # Scheduled departure time
-    arrival_time: str  # Scheduled arrival time
-    duration_minutes: int  # Flight duration
-    aircraft_type: Optional[str] = None
-    days_of_operation: List[str] = []  # ["Mon", "Tue", "Wed", ...]
-    is_active: bool = True
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
-    
-    model_config = ConfigDict(
-        populate_by_name=True,
-        arbitrary_types_allowed=True
-    )
-
-
-class Booking(BaseModel):
-    """Customer booking information model"""
-    id: Optional[PyObjectId] = Field(alias="_id", default=None)
-    booking_reference: str  # PNR/Booking reference (unique)
-    customer_email: str
-    customer_name: str
-    customer_phone: Optional[str] = None
-    flight_number: str
-    origin: str
-    destination: str
-    departure_date: datetime
-    arrival_date: datetime
-    booking_class: str = "economy"  # economy, business, first
-    seat_number: Optional[str] = None
-    ticket_price: float
-    booking_status: str = "confirmed"  # confirmed, cancelled, pending
-    payment_status: str = "paid"  # paid, pending, refunded
-    passengers: List[Dict[str, Any]] = []  # List of passenger details
-    special_requests: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
-    
     model_config = ConfigDict(
         populate_by_name=True,
         arbitrary_types_allowed=True
@@ -268,6 +210,184 @@ class AgentHoliday(BaseModel):
     )
 
 
+class SystemConfiguration(BaseModel):
+    """System configuration for support channels"""
+    id: Optional[PyObjectId] = Field(alias="_id", default=None)
+    config_id: str = "system_config"  # Single configuration instance
+    
+    # Email Configuration
+    support_email: str = "r15528850@gmail.com"  # Default email
+    email_host: str = "smtp.gmail.com"
+    email_port: int = 587
+    email_user: Optional[str] = None
+    email_password: Optional[str] = None
+    imap_host: str = "imap.gmail.com"
+    imap_port: int = 993
+    
+    # SMS Configuration (Twilio)
+    sms_enabled: bool = False
+    sms_phone_number: Optional[str] = None
+    twilio_account_sid: Optional[str] = None
+    twilio_auth_token: Optional[str] = None
+    twilio_phone_number: Optional[str] = None
+    
+    # WhatsApp Configuration
+    whatsapp_enabled: bool = True
+    whatsapp_number: str = "whatsapp:+14155238886"
+    twilio_whatsapp_number: str = "whatsapp:+14155238886"
+    
+    # Chat Configuration
+    chat_enabled: bool = True
+    
+    # Metadata
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    
+    model_config = ConfigDict(
+        populate_by_name=True,
+        arbitrary_types_allowed=True
+    )
+
+
+# ========================================================================
+# ENHANCED CONFIGURATION MODELS
+# ========================================================================
+
+class EmailConfig(BaseModel):
+    """Email configuration settings"""
+    support_email: str = "r15528850@gmail.com"
+    email_host: str = "smtp.gmail.com"
+    email_port: int = 587
+    email_user: Optional[str] = None
+    email_password: Optional[str] = None
+    use_tls: bool = True
+    use_ssl: bool = False
+
+
+class WhatsAppConfig(BaseModel):
+    """WhatsApp configuration settings"""
+    enabled: bool = False
+    whatsapp_number: str = "whatsapp:+14155238886"
+    twilio_account_sid: Optional[str] = None
+    twilio_auth_token: Optional[str] = None
+    twilio_phone_number: Optional[str] = None
+
+
+class SMSConfig(BaseModel):
+    """SMS configuration settings"""
+    enabled: bool = False
+    sms_phone_number: Optional[str] = None
+    twilio_account_sid: Optional[str] = None
+    twilio_auth_token: Optional[str] = None
+    twilio_phone_number: Optional[str] = None
+
+
+class ModelConfig(BaseModel):
+    """AI Model configuration settings"""
+    # LLM Configuration
+    llm_provider: str = "openai"  # openai, anthropic, google, azure_openai, local
+    llm_model: str = "gpt-3.5-turbo"  # gpt-3.5-turbo, gpt-4, claude-3-sonnet, etc.
+    llm_api_key: Optional[str] = None
+    llm_base_url: Optional[str] = None  # For local models or custom endpoints
+    llm_temperature: float = 0.7
+    llm_max_tokens: int = 2000
+    
+    # Embedding Configuration
+    embedding_provider: str = "openai"  # openai, huggingface, sentence_transformers, local
+    embedding_model: str = "text-embedding-ada-002"  # text-embedding-ada-002, all-MiniLM-L6-v2, etc.
+    embedding_api_key: Optional[str] = None
+    embedding_base_url: Optional[str] = None
+    embedding_dimensions: int = 1536
+
+
+class VectorDBConfig(BaseModel):
+    """Vector Database configuration settings"""
+    provider: str = "chroma"  # chroma, pinecone, weaviate, faiss
+    enabled: bool = True
+    
+    # Chroma Configuration
+    chroma_host: str = "localhost"
+    chroma_port: int = 8000
+    chroma_collection_name: str = "knowledge_base"
+    chroma_persist_directory: Optional[str] = None
+    
+    # Pinecone Configuration
+    pinecone_api_key: Optional[str] = None
+    pinecone_environment: Optional[str] = None
+    pinecone_index_name: str = "knowledge-base"
+    pinecone_namespace: Optional[str] = None
+    
+    # Weaviate Configuration
+    weaviate_url: str = "http://localhost:8080"
+    weaviate_api_key: Optional[str] = None
+    weaviate_class_name: str = "KnowledgeDocument"
+    
+    # FAISS Configuration
+    faiss_index_path: str = "./vector_store/faiss_index"
+    faiss_index_type: str = "Flat"  # Flat, IVF, HNSW
+
+
+class KnowledgeProviderConfig(BaseModel):
+    """Knowledge Provider configuration settings"""
+    provider: str = "local"  # local, aws_s3, azure_blob, google_drive, dropbox
+    enabled: bool = True
+    
+    # AWS S3 Configuration
+    aws_access_key_id: Optional[str] = None
+    aws_secret_access_key: Optional[str] = None
+    aws_region: str = "us-east-1"
+    aws_bucket_name: Optional[str] = None
+    aws_prefix: str = "knowledge-base/"
+    
+    # Azure Blob Storage Configuration
+    azure_account_name: Optional[str] = None
+    azure_account_key: Optional[str] = None
+    azure_container_name: Optional[str] = None
+    azure_connection_string: Optional[str] = None
+    
+    # Google Drive Configuration
+    google_credentials_file: Optional[str] = None
+    google_folder_id: Optional[str] = None
+    google_service_account_email: Optional[str] = None
+    
+    # Dropbox Configuration
+    dropbox_access_token: Optional[str] = None
+    dropbox_folder_path: str = "/knowledge-base"
+
+
+class EnhancedSystemConfiguration(BaseModel):
+    """Enhanced system configuration with tabs"""
+    id: Optional[PyObjectId] = Field(default=None, alias="_id")
+    config_id: str = "enhanced_system_config"
+    
+    # Channel Configurations
+    email: Optional[EmailConfig] = Field(default_factory=EmailConfig)
+    whatsapp: Optional[WhatsAppConfig] = Field(default_factory=WhatsAppConfig)
+    sms: Optional[SMSConfig] = Field(default_factory=SMSConfig)
+    
+    # AI Configuration
+    model: Optional[ModelConfig] = Field(default_factory=ModelConfig)
+    vector_db: Optional[VectorDBConfig] = Field(default_factory=VectorDBConfig)
+    knowledge_provider: Optional[KnowledgeProviderConfig] = Field(default_factory=KnowledgeProviderConfig)
+    
+    # System Settings
+    chat_enabled: bool = True
+    auto_assignment_enabled: bool = True
+    escalation_enabled: bool = True
+    notification_enabled: bool = True
+    
+    # Metadata
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_by: Optional[str] = None
+    version: str = "1.0.0"
+    
+    model_config = ConfigDict(
+        populate_by_name=True,
+        arbitrary_types_allowed=True
+    )
+
+
 class SLAEscalationRule(BaseModel):
     """Escalation rules for SLA breaches"""
     level: int  # Escalation level (1, 2, 3, etc.)
@@ -289,7 +409,6 @@ class SLAPolicy(BaseModel):
     description: Optional[str] = None
     
     # Policy applicability
-    domain: str = "IT"  # IT or AIRLINE
     categories: List[str] = []  # Empty means applies to all categories
     priorities: List[str] = []  # Empty means applies to all priorities
     customer_tiers: List[str] = ["standard"]  # VIP, premium, standard, etc.
@@ -330,7 +449,6 @@ class SLATemplate(BaseModel):
     template_id: str  # Unique template identifier
     name: str  # Template name (e.g., "Standard IT Support", "Enterprise SLA")
     description: str
-    category: str  # "IT", "AIRLINE", "GENERAL"
     
     # Template policies (list of policy configurations)
     policies: List[Dict[str, Any]] = []  # Policy data that can be applied
@@ -358,13 +476,13 @@ class DatabaseManager:
         # Create indexes
         await self._create_indexes()
         
-        print(f"✓ Connected to MongoDB: {settings.mongodb_db_name}")
+        print(f"Connected to MongoDB: {settings.mongodb_db_name}")
     
     async def disconnect(self):
         """Disconnect from MongoDB"""
         if self.client:
             self.client.close()
-            print("✓ Disconnected from MongoDB")
+            print("Disconnected from MongoDB")
     
     async def _create_indexes(self):
         """Create database indexes"""
@@ -631,64 +749,6 @@ class DatabaseManager:
             return Agent(**agent_data)
         
         return None
-    
-    # Booking Operations
-    async def create_booking(self, booking: Booking) -> str:
-        """Create a new booking"""
-        booking_dict = booking.model_dump(by_alias=True, exclude={"id"})
-        result = await self.db.bookings.insert_one(booking_dict)
-        return str(result.inserted_id)
-    
-    async def get_booking(self, booking_reference: str) -> Optional[Booking]:
-        """Get booking by reference"""
-        booking_data = await self.db.bookings.find_one({"booking_reference": booking_reference})
-        if booking_data:
-            return Booking(**booking_data)
-        return None
-    
-    async def get_bookings_by_customer(self, customer_email: str) -> List[Booking]:
-        """Get all bookings for a customer"""
-        bookings = []
-        cursor = self.db.bookings.find({"customer_email": customer_email})
-        async for booking_data in cursor:
-            bookings.append(Booking(**booking_data))
-        return bookings
-    
-    async def update_booking(self, booking_reference: str, update_data: dict):
-        """Update a booking"""
-        update_data["updated_at"] = datetime.utcnow()
-        await self.db.bookings.update_one(
-            {"booking_reference": booking_reference},
-            {"$set": update_data}
-        )
-    
-    # Flight Route Operations
-    async def create_flight_route(self, flight: FlightRoute) -> str:
-        """Create a new flight route"""
-        flight_dict = flight.model_dump(by_alias=True, exclude={"id"})
-        result = await self.db.flights.insert_one(flight_dict)
-        return str(result.inserted_id)
-    
-    async def get_flight_route(self, flight_number: str) -> Optional[FlightRoute]:
-        """Get flight route by flight number"""
-        flight_data = await self.db.flights.find_one({"flight_number": flight_number})
-        if flight_data:
-            return FlightRoute(**flight_data)
-        return None
-    
-    async def search_flights(self, origin: str = None, destination: str = None) -> List[FlightRoute]:
-        """Search flights by origin/destination"""
-        query = {"is_active": True}
-        if origin:
-            query["origin"] = origin
-        if destination:
-            query["destination"] = destination
-        
-        flights = []
-        cursor = self.db.flights.find(query)
-        async for flight_data in cursor:
-            flights.append(FlightRoute(**flight_data))
-        return flights
     
     # SLA and Escalation Helpers
     def calculate_sla_deadlines(self, ticket: SupportTicket) -> Dict[str, datetime]:
@@ -980,28 +1040,50 @@ class DatabaseManager:
         holiday = await self.db.agent_holidays.find_one(query)
         return holiday is not None
     
-    async def get_available_agents(self, date: str, time: str = None, skills: List[str] = None, domain: str = "IT") -> List[Agent]:
-        """Get agents available on a specific date and time (considering holidays)"""
+    async def get_available_agents(self, date: str = None, time: str = None, skills: List[str] = None, domain: str = "IT") -> List[Agent]:
+        """Get agents available (considering skills and workload only, holidays ignored)"""
         # First get all active agents with required skills
         query = {
             "is_active": True,
-            "domain": domain,
             "$expr": {"$lt": ["$current_load", "$max_concurrent_tickets"]}
         }
         
         if skills:
             query["skills"] = {"$in": skills}
         
+        print(f"   [DEBUG] Query for available agents:")
+        print(f"      - Skills filter: {skills}")
+        print(f"      - Query: {query}")
+        
         available_agents = []
+        total_agents = 0
+        
+        # Debug: Count total agents first
+        async for _ in self.db.agents.find({"is_active": True}):
+            total_agents += 1
+        
+        print(f"   [DEBUG] Total active agents in DB: {total_agents}")
+        
+        # Debug: Check domain distribution
+        domain_counts = {}
+        async for agent_data in self.db.agents.find({"is_active": True}):
+            domain_counts[agent_data.get("domain", "unknown")] = domain_counts.get(agent_data.get("domain", "unknown"), 0) + 1
+        print(f"   [DEBUG] Agents by domain: {domain_counts}")
+        
+        # Debug: Check agents with matching skills
+        if skills:
+            async for agent_data in self.db.agents.find({"is_active": True, "skills": {"$in": skills}}):
+                agent_domain = agent_data.get("domain", "unknown")
+                agent_skills = agent_data.get("skills", [])
+                print(f"   [DEBUG] Found agent with matching skills: {agent_data.get('name')} (domain={agent_domain}, skills={agent_skills}, load={agent_data.get('current_load')}/{agent_data.get('max_concurrent_tickets')})")
+        
         cursor = self.db.agents.find(query)
         async for agent_data in cursor:
             agent = Agent(**agent_data)
-            
-            # Check if agent is on holiday
-            is_on_holiday = await self.is_agent_on_holiday(agent.agent_id, date, time)
-            if not is_on_holiday:
-                available_agents.append(agent)
+            available_agents.append(agent)
+            print(f"   [DEBUG] Added agent: {agent.name} (load: {agent.current_load}/{agent.max_concurrent_tickets})")
         
+        print(f"   [DEBUG] Found {len(available_agents)} available agents")
         return available_agents
     
     async def update_agent_holiday(self, holiday_id: str, update_data: Dict[str, Any]) -> bool:
@@ -1017,6 +1099,95 @@ class DatabaseManager:
         """Delete agent holiday entry"""
         result = await self.db.agent_holidays.delete_one({"_id": ObjectId(holiday_id)})
         return result.deleted_count > 0
+    
+    # ========================================================================
+    # SYSTEM CONFIGURATION MANAGEMENT
+    # ========================================================================
+    
+    async def get_system_config(self) -> Optional[SystemConfiguration]:
+        """Get system configuration"""
+        config_data = await self.db.configurations.find_one({"config_id": "system_config"})
+        if config_data:
+            return SystemConfiguration(**config_data)
+        return None
+    
+    async def update_system_config(self, config: SystemConfiguration) -> bool:
+        """Update or create system configuration"""
+        config_dict = config.model_dump(by_alias=True, exclude={"id"})
+        config_dict["updated_at"] = datetime.utcnow()
+        
+        result = await self.db.configurations.update_one(
+            {"config_id": "system_config"},
+            {"$set": config_dict},
+            upsert=True
+        )
+        return result.modified_count > 0 or result.upserted_id is not None
+
+    # ========================================================================
+    # ENHANCED CONFIGURATION MANAGEMENT
+    # ========================================================================
+    
+    async def get_enhanced_config(self) -> Optional[EnhancedSystemConfiguration]:
+        """Get enhanced system configuration"""
+        config_data = await self.db.enhanced_configurations.find_one({"config_id": "enhanced_system_config"})
+        if config_data:
+            return EnhancedSystemConfiguration(**config_data)
+        return None
+    
+    async def update_enhanced_config(self, config: EnhancedSystemConfiguration) -> bool:
+        """Update or create enhanced system configuration"""
+        config_dict = config.model_dump(by_alias=True, exclude={"id"})
+        config_dict["updated_at"] = datetime.utcnow()
+        config_dict["config_id"] = "enhanced_system_config"
+        
+        result = await self.db.enhanced_configurations.update_one(
+            {"config_id": "enhanced_system_config"},
+            {"$set": config_dict},
+            upsert=True
+        )
+        return result.modified_count > 0 or result.upserted_id is not None
+    
+    async def get_config_section(self, section: str) -> Optional[Dict[str, Any]]:
+        """Get specific configuration section (email, whatsapp, sms, model, vector_db, knowledge_provider)"""
+        config = await self.get_enhanced_config()
+        if not config:
+            return None
+        
+        section_map = {
+            "email": config.email.model_dump(),
+            "whatsapp": config.whatsapp.model_dump(),
+            "sms": config.sms.model_dump(),
+            "model": config.model.model_dump(),
+            "vector_db": config.vector_db.model_dump(),
+            "knowledge_provider": config.knowledge_provider.model_dump()
+        }
+        
+        return section_map.get(section)
+    
+    async def update_config_section(self, section: str, section_config: Dict[str, Any]) -> bool:
+        """Update specific configuration section"""
+        config = await self.get_enhanced_config()
+        if not config:
+            config = EnhancedSystemConfiguration()
+        
+        # Update the specific section
+        if section == "email":
+            config.email = EmailConfig(**section_config)
+        elif section == "whatsapp":
+            config.whatsapp = WhatsAppConfig(**section_config)
+        elif section == "sms":
+            config.sms = SMSConfig(**section_config)
+        elif section == "model":
+            config.model = ModelConfig(**section_config)
+        elif section == "vector_db":
+            config.vector_db = VectorDBConfig(**section_config)
+        elif section == "knowledge_provider":
+            config.knowledge_provider = KnowledgeProviderConfig(**section_config)
+        else:
+            return False
+        
+        config.updated_at = datetime.utcnow()
+        return await self.update_enhanced_config(config)
 
 
 # Global database manager instance

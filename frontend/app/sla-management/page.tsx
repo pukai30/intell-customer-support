@@ -300,19 +300,6 @@ export default function SLAManagementPage() {
                       placeholder="e.g., IT_CRITICAL_247"
                     />
                   </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Domain *
-                    </label>
-                    <select
-                      value={formData.domain}
-                      onChange={(e) => setFormData({...formData, domain: e.target.value})}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                    >
-                      <option value="IT">IT</option>
-                      <option value="AIRLINE">AIRLINE</option>
-                    </select>
-                  </div>
                 </div>
 
                 <div>

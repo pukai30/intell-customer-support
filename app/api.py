@@ -1,7 +1,7 @@
 """
 FastAPI application and routes
 """
-from fastapi import FastAPI, HTTPException, Request, Form, UploadFile, File, Query
+from fastapi import FastAPI, HTTPException, Request, Form, UploadFile, File, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 
 from app.config import settings
-from app.database import db_manager, SupportTicket, ConversationMessage, Agent
+from app.database import db_manager, SupportTicket, ConversationMessage, Agent, SystemConfiguration
 from app.rag_system import rag_system
 from app.email_integration import email_integration
 from app.sms_integration import sms_integration
@@ -105,6 +105,26 @@ async def startup_event():
     
     # Connect to database
     await db_manager.connect()
+    
+    # Initialize system configuration if it doesn't exist
+    config = await db_manager.get_system_config()
+    if not config:
+        print("📝 Creating default system configuration...")
+        default_config = SystemConfiguration(
+            config_id="system_config",
+            support_email="r15528850@gmail.com",
+            email_host="smtp.gmail.com",
+            email_port=587,
+            twilio_phone_number="+14155238886",
+            whatsapp_number="whatsapp:+14155238886",
+            whatsapp_enabled=True,
+            sms_enabled=False,
+            chat_enabled=True
+        )
+        await db_manager.update_system_config(default_config)
+        print("✓ Default system configuration created")
+    else:
+        print("✓ System configuration found")
     
     # Initialize RAG system
     await rag_system.initialize()
@@ -245,6 +265,32 @@ async def whatsapp_webhook(
     except Exception as e:
         print(f"Error in WhatsApp webhook: {e}")
         return JSONResponse(content={"status": "error"}, status_code=500)
+
+
+@app.post("/api/whatsapp/check-messages")
+async def check_whatsapp_messages_on_demand():
+    """On-demand endpoint to check for new WhatsApp messages"""
+    try:
+        messages = await whatsapp_integration.check_new_whatsapp_messages(since_minutes=10)
+        
+        processed_count = 0
+        for msg in messages:
+            await whatsapp_integration.process_incoming_whatsapp(
+                from_phone=msg["from_phone"],
+                message=msg["message"],
+                message_sid=msg["message_sid"],
+                media_url=None
+            )
+            processed_count += 1
+        
+        return {
+            "status": "success",
+            "messages_found": len(messages),
+            "messages_processed": processed_count
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # Knowledge base management
@@ -390,7 +436,9 @@ async def list_knowledge_documents(
                     "created_by": doc.created_by,
                     "created_at": doc.created_at.isoformat(),
                     "updated_at": doc.updated_at.isoformat(),
-                    "content_preview": doc.content[:200] + "..." if len(doc.content) > 200 else doc.content
+                    "content_preview": doc.content[:200] + "..." if len(doc.content) > 200 else doc.content,
+                    "is_embedded": len(doc.chunk_ids) > 0 if doc.chunk_ids else False,
+                    "chunk_count": len(doc.chunk_ids) if doc.chunk_ids else 0
                 }
                 for doc in docs
             ]
@@ -488,6 +536,113 @@ async def delete_knowledge_document(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/knowledge/{doc_id}/re-embed")
+async def re_embed_knowledge_document(doc_id: str):
+    """Re-embed a document in the vector store"""
+    try:
+        # Get the document
+        doc = await db_manager.get_knowledge_document(doc_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        # Delete old chunks from vector store
+        if doc.chunk_ids:
+            await rag_system._delete_document_chunks(doc.chunk_ids)
+        
+        # Re-embed the document
+        doc_ids = await rag_system.add_documents_to_knowledge_base(
+            documents=[{
+                "title": doc.title,
+                "content": doc.content,
+                "tags": doc.tags,
+                "source": doc.source,
+                "file_name": doc.file_name,
+                "file_type": doc.file_type
+            }],
+            category=doc.category,
+            is_temporary=doc.is_temporary,
+            expires_in_days=None,
+            created_by=doc.created_by
+        )
+        
+        return {
+            "status": "success",
+            "message": f"Document '{doc.title}' successfully re-embedded in vector store",
+            "document_id": doc_id,
+            "chunks_created": len(doc_ids)
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/knowledge/batch-re-embed")
+async def batch_re_embed_documents(doc_ids: List[str] = Body(...)):
+    """Re-embed multiple documents in the vector store"""
+    try:
+        results = []
+        for doc_id in doc_ids:
+            try:
+                # Get the document
+                doc = await db_manager.get_knowledge_document(doc_id)
+                if not doc:
+                    results.append({
+                        "document_id": doc_id,
+                        "status": "error",
+                        "message": "Document not found"
+                    })
+                    continue
+                
+                # Delete old chunks from vector store
+                if doc.chunk_ids:
+                    await rag_system._delete_document_chunks(doc.chunk_ids)
+                
+                # Re-embed the document
+                new_doc_ids = await rag_system.add_documents_to_knowledge_base(
+                    documents=[{
+                        "title": doc.title,
+                        "content": doc.content,
+                        "tags": doc.tags,
+                        "source": doc.source,
+                        "file_name": doc.file_name,
+                        "file_type": doc.file_type
+                    }],
+                    category=doc.category,
+                    is_temporary=doc.is_temporary,
+                    expires_in_days=None,
+                    created_by=doc.created_by
+                )
+                
+                results.append({
+                    "document_id": doc_id,
+                    "status": "success",
+                    "message": f"Document '{doc.title}' re-embedded successfully",
+                    "chunks_created": len(new_doc_ids)
+                })
+                
+            except Exception as e:
+                results.append({
+                    "document_id": doc_id,
+                    "status": "error",
+                    "message": str(e)
+                })
+        
+        success_count = sum(1 for r in results if r["status"] == "success")
+        
+        return {
+            "status": "success",
+            "total": len(doc_ids),
+            "success": success_count,
+            "failed": len(doc_ids) - success_count,
+            "results": results
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/knowledge/categories/list")
 async def list_categories():
     """Get list of all categories in knowledge base"""
@@ -554,9 +709,12 @@ async def get_assigned_tickets(agent_email: str):
     """Get all tickets assigned to a specific agent"""
     try:
         all_tickets = await db_manager.get_all_tickets()
+        # Normalize email for comparison and filter active tickets only
+        normalized_email = agent_email.strip().lower()
         assigned_tickets = [
             ticket for ticket in all_tickets 
-            if ticket.assigned_to == agent_email
+            if ticket.assigned_to and ticket.assigned_to.strip().lower() == normalized_email
+            and ticket.status in ["open", "in_progress", "pending"]
         ]
         
         return {
@@ -779,6 +937,86 @@ async def assign_ticket(ticket_id: str, request: AssignTicketRequest):
             "status": "success",
             "message": f"Ticket assigned to {request.assigned_to}",
             "ticket_id": ticket_id
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ReassignTicketRequest(BaseModel):
+    ticket_id: str
+    new_agent_id: str  # Agent ID to reassign to
+    reason: Optional[str] = None
+
+
+@app.post("/api/tickets/{ticket_id}/reassign")
+async def reassign_ticket(ticket_id: str, request: ReassignTicketRequest):
+    """Reassign a ticket to a different agent"""
+    try:
+        ticket = await db_manager.get_ticket(ticket_id)
+        if not ticket:
+            raise HTTPException(status_code=404, detail="Ticket not found")
+        
+        # Get the new agent
+        new_agent = await db_manager.get_agent(request.new_agent_id)
+        if not new_agent:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        
+        if not new_agent.is_active:
+            raise HTTPException(status_code=400, detail="Cannot assign to inactive agent")
+        
+        # Get old agent info for logging
+        old_agent_email = ticket.assigned_to
+        
+        # Update ticket with new assignment
+        update_data = {
+            "assigned_to": new_agent.email,
+            "assigned_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow()
+        }
+        
+        # Add reassignment notes to metadata
+        if not ticket.metadata:
+            ticket.metadata = {}
+        ticket.metadata["reassignment_history"] = ticket.metadata.get("reassignment_history", [])
+        ticket.metadata["reassignment_history"].append({
+            "from_agent": old_agent_email,
+            "to_agent": new_agent.email,
+            "to_agent_id": request.new_agent_id,
+            "reason": request.reason,
+            "timestamp": datetime.utcnow().isoformat()
+        })
+        update_data["metadata"] = ticket.metadata
+        
+        await db_manager.update_ticket(ticket_id, update_data)
+        
+        # Add system message to conversation
+        reassign_message = f"Ticket reassigned from {old_agent_email} to {new_agent.name} ({new_agent.email})"
+        if request.reason:
+            reassign_message += f". Reason: {request.reason}"
+        
+        system_message = ConversationMessage(
+            role="system",
+            content=reassign_message,
+            metadata={
+                "from_agent": old_agent_email,
+                "to_agent": new_agent.email,
+                "to_agent_id": request.new_agent_id,
+                "action": "reassignment",
+                "reason": request.reason
+            }
+        )
+        await db_manager.add_message_to_ticket(ticket_id, system_message)
+        
+        return {
+            "status": "success",
+            "message": f"Ticket reassigned to {new_agent.name}",
+            "ticket_id": ticket_id,
+            "old_agent": old_agent_email,
+            "new_agent": new_agent.email,
+            "new_agent_id": request.new_agent_id
         }
     
     except HTTPException:
@@ -1015,277 +1253,277 @@ async def get_agent_stats(agent_id: str):
 
 
 # ============================================================================
-# SLA MANAGEMENT APIs
+# SLA MANAGEMENT APIs - COMMENTED OUT
 # ============================================================================
 
-from app.database import SLAPolicy, SLATemplate, BusinessHours, Holiday, SLAEscalationRule
+# from app.database import SLAPolicy, SLATemplate, BusinessHours, Holiday, SLAEscalationRule
 
-class CreateSLAPolicyRequest(BaseModel):
-    """Request model for creating SLA policy"""
-    policy_id: str
-    name: str
-    description: Optional[str] = None
-    domain: str = "IT"
-    categories: List[str] = []
-    priorities: List[str] = []
-    customer_tiers: List[str] = ["standard"]
-    response_time_minutes: int
-    resolution_time_minutes: int
-    use_business_hours: bool = True
-    business_hours: Optional[Dict[str, Any]] = None
-    holidays: List[Dict[str, Any]] = []
-    escalation_rules: List[Dict[str, Any]] = []
-    auto_escalate: bool = True
-    is_default: bool = False
-    priority_order: int = 0
-    created_by: Optional[str] = None
-
-
-@app.post("/api/sla/policies/create")
-async def create_sla_policy(request: CreateSLAPolicyRequest):
-    """Create a new SLA policy"""
-    try:
-        # Check if policy_id already exists
-        existing = await db_manager.get_sla_policy(request.policy_id)
-        if existing:
-            raise HTTPException(status_code=400, detail="Policy ID already exists")
-        
-        # Build business hours if provided
-        bh = None
-        if request.business_hours:
-            bh = BusinessHours(**request.business_hours)
-        else:
-            bh = BusinessHours()
-        
-        # Build holidays
-        holidays = [Holiday(**h) for h in request.holidays]
-        
-        # Build escalation rules
-        escalation_rules = [SLAEscalationRule(**er) for er in request.escalation_rules]
-        
-        policy = SLAPolicy(
-            policy_id=request.policy_id,
-            name=request.name,
-            description=request.description,
-            domain=request.domain,
-            categories=request.categories,
-            priorities=request.priorities,
-            customer_tiers=request.customer_tiers,
-            response_time_minutes=request.response_time_minutes,
-            resolution_time_minutes=request.resolution_time_minutes,
-            use_business_hours=request.use_business_hours,
-            business_hours=bh,
-            holidays=holidays,
-            escalation_rules=escalation_rules,
-            auto_escalate=request.auto_escalate,
-            is_default=request.is_default,
-            priority_order=request.priority_order,
-            created_by=request.created_by
-        )
-        
-        policy_id = await db_manager.create_sla_policy(policy)
-        
-        return {
-            "status": "success",
-            "policy_id": request.policy_id,
-            "message": "SLA policy created successfully"
-        }
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# class CreateSLAPolicyRequest(BaseModel):
+#     """Request model for creating SLA policy"""
+#     policy_id: str
+#     name: str
+#     description: Optional[str] = None
+#     domain: str = "IT"
+#     categories: List[str] = []
+#     priorities: List[str] = []
+#     customer_tiers: List[str] = ["standard"]
+#     response_time_minutes: int
+#     resolution_time_minutes: int
+#     use_business_hours: bool = True
+#     business_hours: Optional[Dict[str, Any]] = None
+#     holidays: List[Dict[str, Any]] = []
+#     escalation_rules: List[Dict[str, Any]] = []
+#     auto_escalate: bool = True
+#     is_default: bool = False
+#     priority_order: int = 0
+#     created_by: Optional[str] = None
 
 
-@app.get("/api/sla/policies/list")
-async def list_sla_policies(domain: Optional[str] = None, is_active: Optional[bool] = None):
-    """Get all SLA policies"""
-    try:
-        policies = await db_manager.get_all_sla_policies(domain=domain, is_active=is_active)
-        
-        return {
-            "policies": [
-                {
-                    "policy_id": p.policy_id,
-                    "name": p.name,
-                    "description": p.description,
-                    "domain": p.domain,
-                    "categories": p.categories,
-                    "priorities": p.priorities,
-                    "customer_tiers": p.customer_tiers,
-                    "response_time_minutes": p.response_time_minutes,
-                    "resolution_time_minutes": p.resolution_time_minutes,
-                    "use_business_hours": p.use_business_hours,
-                    "is_active": p.is_active,
-                    "is_default": p.is_default,
-                    "priority_order": p.priority_order,
-                    "created_at": p.created_at.isoformat(),
-                    "updated_at": p.updated_at.isoformat()
-                }
-                for p in policies
-            ],
-            "count": len(policies)
-        }
-    
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# @app.post("/api/sla/policies/create")
+# async def create_sla_policy(request: CreateSLAPolicyRequest):
+#     """Create a new SLA policy"""
+#     try:
+#         # Check if policy_id already exists
+#         existing = await db_manager.get_sla_policy(request.policy_id)
+#         if existing:
+#             raise HTTPException(status_code=400, detail="Policy ID already exists")
+#         
+#         # Build business hours if provided
+#         bh = None
+#         if request.business_hours:
+#             bh = BusinessHours(**request.business_hours)
+#         else:
+#             bh = BusinessHours()
+#         
+#         # Build holidays
+#         holidays = [Holiday(**h) for h in request.holidays]
+#         
+#         # Build escalation rules
+#         escalation_rules = [SLAEscalationRule(**er) for er in request.escalation_rules]
+#         
+#         policy = SLAPolicy(
+#             policy_id=request.policy_id,
+#             name=request.name,
+#             description=request.description,
+#             domain=request.domain,
+#             categories=request.categories,
+#             priorities=request.priorities,
+#             customer_tiers=request.customer_tiers,
+#             response_time_minutes=request.response_time_minutes,
+#             resolution_time_minutes=request.resolution_time_minutes,
+#             use_business_hours=request.use_business_hours,
+#             business_hours=bh,
+#             holidays=holidays,
+#             escalation_rules=escalation_rules,
+#             auto_escalate=request.auto_escalate,
+#             is_default=request.is_default,
+#             priority_order=request.priority_order,
+#             created_by=request.created_by
+#         )
+#         
+#         policy_id = await db_manager.create_sla_policy(policy)
+#         
+#         return {
+#             "status": "success",
+#             "policy_id": request.policy_id,
+#             "message": "SLA policy created successfully"
+#         }
+#     
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/sla/policies/{policy_id}")
-async def get_sla_policy(policy_id: str):
-    """Get SLA policy details"""
-    try:
-        policy = await db_manager.get_sla_policy(policy_id)
-        if not policy:
-            raise HTTPException(status_code=404, detail="Policy not found")
-        
-        return {
-            "policy_id": policy.policy_id,
-            "name": policy.name,
-            "description": policy.description,
-            "domain": policy.domain,
-            "categories": policy.categories,
-            "priorities": policy.priorities,
-            "customer_tiers": policy.customer_tiers,
-            "response_time_minutes": policy.response_time_minutes,
-            "resolution_time_minutes": policy.resolution_time_minutes,
-            "use_business_hours": policy.use_business_hours,
-            "business_hours": policy.business_hours.model_dump() if policy.business_hours else None,
-            "holidays": [h.model_dump() for h in policy.holidays],
-            "escalation_rules": [er.model_dump() for er in policy.escalation_rules],
-            "auto_escalate": policy.auto_escalate,
-            "is_active": policy.is_active,
-            "is_default": policy.is_default,
-            "priority_order": policy.priority_order,
-            "created_by": policy.created_by,
-            "created_at": policy.created_at.isoformat(),
-            "updated_at": policy.updated_at.isoformat()
-        }
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# @app.get("/api/sla/policies/list")
+# async def list_sla_policies(domain: Optional[str] = None, is_active: Optional[bool] = None):
+#     """Get all SLA policies"""
+#     try:
+#         policies = await db_manager.get_all_sla_policies(domain=domain, is_active=is_active)
+#         
+#         return {
+#             "policies": [
+#                 {
+#                     "policy_id": p.policy_id,
+#                     "name": p.name,
+#                     "description": p.description,
+#                     "domain": p.domain,
+#                     "categories": p.categories,
+#                     "priorities": p.priorities,
+#                     "customer_tiers": p.customer_tiers,
+#                     "response_time_minutes": p.response_time_minutes,
+#                     "resolution_time_minutes": p.resolution_time_minutes,
+#                     "use_business_hours": p.use_business_hours,
+#                     "is_active": p.is_active,
+#                     "is_default": p.is_default,
+#                     "priority_order": p.priority_order,
+#                     "created_at": p.created_at.isoformat(),
+#                     "updated_at": p.updated_at.isoformat()
+#                 }
+#                 for p in policies
+#             ],
+#             "count": len(policies)
+#         }
+#     
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.put("/api/sla/policies/{policy_id}")
-async def update_sla_policy(policy_id: str, update_data: Dict[str, Any]):
-    """Update SLA policy"""
-    try:
-        policy = await db_manager.get_sla_policy(policy_id)
-        if not policy:
-            raise HTTPException(status_code=404, detail="Policy not found")
-        
-        success = await db_manager.update_sla_policy(policy_id, update_data)
-        
-        if success:
-            return {
-                "status": "success",
-                "policy_id": policy_id,
-                "message": "Policy updated successfully"
-            }
-        else:
-            return {
-                "status": "error",
-                "message": "No changes made"
-            }
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# @app.get("/api/sla/policies/{policy_id}")
+# async def get_sla_policy(policy_id: str):
+#     """Get SLA policy details"""
+#     try:
+#         policy = await db_manager.get_sla_policy(policy_id)
+#         if not policy:
+#             raise HTTPException(status_code=404, detail="Policy not found")
+#         
+#         return {
+#             "policy_id": policy.policy_id,
+#             "name": policy.name,
+#             "description": policy.description,
+#             "domain": policy.domain,
+#             "categories": policy.categories,
+#             "priorities": policy.priorities,
+#             "customer_tiers": policy.customer_tiers,
+#             "response_time_minutes": policy.response_time_minutes,
+#             "resolution_time_minutes": policy.resolution_time_minutes,
+#             "use_business_hours": policy.use_business_hours,
+#             "business_hours": policy.business_hours.model_dump() if policy.business_hours else None,
+#             "holidays": [h.model_dump() for h in policy.holidays],
+#             "escalation_rules": [er.model_dump() for er in policy.escalation_rules],
+#             "auto_escalate": policy.auto_escalate,
+#             "is_active": policy.is_active,
+#             "is_default": policy.is_default,
+#             "priority_order": policy.priority_order,
+#             "created_by": policy.created_by,
+#             "created_at": policy.created_at.isoformat(),
+#             "updated_at": policy.updated_at.isoformat()
+#         }
+#     
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/sla/policies/{policy_id}")
-async def delete_sla_policy(policy_id: str):
-    """Delete (deactivate) SLA policy"""
-    try:
-        policy = await db_manager.get_sla_policy(policy_id)
-        if not policy:
-            raise HTTPException(status_code=404, detail="Policy not found")
-        
-        success = await db_manager.delete_sla_policy(policy_id)
-        
-        return {
-            "status": "success" if success else "error",
-            "policy_id": policy_id,
-            "message": "Policy deactivated successfully" if success else "Failed to deactivate"
-        }
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# @app.put("/api/sla/policies/{policy_id}")
+# async def update_sla_policy(policy_id: str, update_data: Dict[str, Any]):
+#     """Update SLA policy"""
+#     try:
+#         policy = await db_manager.get_sla_policy(policy_id)
+#         if not policy:
+#             raise HTTPException(status_code=404, detail="Policy not found")
+#         
+#         success = await db_manager.update_sla_policy(policy_id, update_data)
+#         
+#         if success:
+#             return {
+#                 "status": "success",
+#                 "policy_id": policy_id,
+#                 "message": "Policy updated successfully"
+#             }
+#         else:
+#             return {
+#                 "status": "error",
+#                 "message": "No changes made"
+#             }
+#     
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/sla/templates/list")
-async def list_sla_templates(category: Optional[str] = None):
-    """Get all SLA templates"""
-    try:
-        templates = await db_manager.get_all_sla_templates(category=category)
-        
-        return {
-            "templates": [
-                {
-                    "template_id": t.template_id,
-                    "name": t.name,
-                    "description": t.description,
-                    "category": t.category,
-                    "policies_count": len(t.policies),
-                    "created_at": t.created_at.isoformat()
-                }
-                for t in templates
-            ],
-            "count": len(templates)
-        }
-    
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# @app.delete("/api/sla/policies/{policy_id}")
+# async def delete_sla_policy(policy_id: str):
+#     """Delete (deactivate) SLA policy"""
+#     try:
+#         policy = await db_manager.get_sla_policy(policy_id)
+#         if not policy:
+#             raise HTTPException(status_code=404, detail="Policy not found")
+#         
+#         success = await db_manager.delete_sla_policy(policy_id)
+#         
+#         return {
+#             "status": "success" if success else "error",
+#             "policy_id": policy_id,
+#             "message": "Policy deactivated successfully" if success else "Failed to deactivate"
+#         }
+#     
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/sla/templates/{template_id}")
-async def get_sla_template(template_id: str):
-    """Get SLA template details"""
-    try:
-        template = await db_manager.get_sla_template(template_id)
-        if not template:
-            raise HTTPException(status_code=404, detail="Template not found")
-        
-        return {
-            "template_id": template.template_id,
-            "name": template.name,
-            "description": template.description,
-            "category": template.category,
-            "policies": template.policies,
-            "created_at": template.created_at.isoformat()
-        }
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# @app.get("/api/sla/templates/list")
+# async def list_sla_templates(category: Optional[str] = None):
+#     """Get all SLA templates"""
+#     try:
+#         templates = await db_manager.get_all_sla_templates(category=category)
+#         
+#         return {
+#             "templates": [
+#                 {
+#                     "template_id": t.template_id,
+#                     "name": t.name,
+#                     "description": t.description,
+#                     "category": t.category,
+#                     "policies_count": len(t.policies),
+#                     "created_at": t.created_at.isoformat()
+#                 }
+#                 for t in templates
+#             ],
+#             "count": len(templates)
+#         }
+#     
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/sla/templates/{template_id}/apply")
-async def apply_sla_template(template_id: str, domain: str = Query("IT")):
-    """Apply an SLA template to create policies"""
-    try:
-        policy_ids = await db_manager.apply_sla_template(template_id, domain)
-        
-        if not policy_ids:
-            raise HTTPException(status_code=404, detail="Template not found or no policies created")
-        
-        return {
-            "status": "success",
-            "template_id": template_id,
-            "created_policies": policy_ids,
-            "message": f"Created {len(policy_ids)} policies from template"
-        }
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# @app.get("/api/sla/templates/{template_id}")
+# async def get_sla_template(template_id: str):
+#     """Get SLA template details"""
+#     try:
+#         template = await db_manager.get_sla_template(template_id)
+#         if not template:
+#             raise HTTPException(status_code=404, detail="Template not found")
+#         
+#         return {
+#             "template_id": template.template_id,
+#             "name": template.name,
+#             "description": template.description,
+#             "category": template.category,
+#             "policies": template.policies,
+#             "created_at": template.created_at.isoformat()
+#         }
+#     
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
+
+
+# @app.post("/api/sla/templates/{template_id}/apply")
+# async def apply_sla_template(template_id: str, domain: str = Query("IT")):
+#     """Apply an SLA template to create policies"""
+#     try:
+#         policy_ids = await db_manager.apply_sla_template(template_id, domain)
+#         
+#         if not policy_ids:
+#             raise HTTPException(status_code=404, detail="Template not found or no policies created")
+#         
+#         return {
+#             "status": "success",
+#             "template_id": template_id,
+#             "created_policies": policy_ids,
+#             "message": f"Created {len(policy_ids)} policies from template"
+#         }
+#     
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============================================================================
@@ -1551,11 +1789,332 @@ async def get_available_agents(date: str, time: Optional[str] = None, skills: Op
 
 
 # ============================================================================
-# AIRLINE SUPPORT APIs - DISABLED
+# SYSTEM CONFIGURATION APIs
 # ============================================================================
-# Airline booking and flight APIs are disabled. 
-# See AIRLINE_FEATURES_DISABLED.md for instructions to re-enable.
-# Code has been removed to fix syntax errors.
+
+class SystemConfigRequest(BaseModel):
+    """Request model for updating system configuration"""
+    support_email: str
+    email_host: Optional[str] = "smtp.gmail.com"
+    email_port: Optional[int] = 587
+    email_user: Optional[str] = None
+    email_password: Optional[str] = None
+    sms_enabled: Optional[bool] = False
+    sms_phone_number: Optional[str] = None
+    twilio_account_sid: Optional[str] = None
+    twilio_auth_token: Optional[str] = None
+    twilio_phone_number: Optional[str] = "+14155238886"
+    whatsapp_enabled: Optional[bool] = True
+    whatsapp_number: Optional[str] = "whatsapp:+14155238886"
+    chat_enabled: Optional[bool] = True
+
+
+@app.get("/api/config")
+async def get_system_config():
+    """Get current system configuration"""
+    try:
+        config = await db_manager.get_system_config()
+        if not config:
+            # Return default configuration
+            return SystemConfiguration(
+                config_id="system_config",
+                support_email="r15528850@gmail.com",
+                twilio_phone_number="+14155238886",
+                whatsapp_number="whatsapp:+14155238886",
+                whatsapp_enabled=True
+            ).model_dump()
+        return config.model_dump()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/config")
+async def update_system_config(request: SystemConfigRequest):
+    """Update system configuration and reload integrations"""
+    try:
+        config = SystemConfiguration(
+            config_id="system_config",
+            support_email=request.support_email,
+            email_host=request.email_host,
+            email_port=request.email_port,
+            email_user=request.email_user,
+            email_password=request.email_password,
+            sms_enabled=request.sms_enabled,
+            sms_phone_number=request.sms_phone_number,
+            twilio_account_sid=request.twilio_account_sid,
+            twilio_auth_token=request.twilio_auth_token,
+            twilio_phone_number=request.twilio_phone_number,
+            whatsapp_enabled=request.whatsapp_enabled,
+            whatsapp_number=request.whatsapp_number,
+            twilio_whatsapp_number=request.whatsapp_number,
+            chat_enabled=request.chat_enabled
+        )
+        
+        success = await db_manager.update_system_config(config)
+        
+        if success:
+            # Reload integrations with new configuration
+            try:
+                # Reload WhatsApp integration with new settings
+                from app.whatsapp_integration import whatsapp_integration
+                whatsapp_integration._init_from_settings()
+                
+                # Update email integration settings
+                from app.email_integration import email_integration
+                email_integration.smtp_host = config.email_host
+                email_integration.smtp_port = config.email_port
+                email_integration.email_user = config.email_user
+                email_integration.email_password = config.email_password
+                
+                print("✓ Integrations reloaded with new configuration")
+            except Exception as reload_error:
+                print(f"⚠️  Warning: Could not reload integrations: {reload_error}")
+            
+            return {
+                "status": "success",
+                "message": "Configuration updated and integrations reloaded",
+                "config": config.model_dump()
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Failed to update configuration")
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# ENHANCED CONFIGURATION APIs
+# ============================================================================
+
+from app.database import (
+    EnhancedSystemConfiguration, 
+    EmailConfig, 
+    WhatsAppConfig, 
+    SMSConfig, 
+    ModelConfig, 
+    VectorDBConfig, 
+    KnowledgeProviderConfig
+)
+
+class EmailConfigRequest(BaseModel):
+    """Request model for email configuration"""
+    support_email: str
+    email_host: str = "smtp.gmail.com"
+    email_port: int = 587
+    email_user: Optional[str] = None
+    email_password: Optional[str] = None
+    use_tls: bool = True
+    use_ssl: bool = False
+
+class WhatsAppConfigRequest(BaseModel):
+    """Request model for WhatsApp configuration"""
+    enabled: bool = False
+    whatsapp_number: str = "whatsapp:+14155238886"
+    twilio_account_sid: Optional[str] = None
+    twilio_auth_token: Optional[str] = None
+    twilio_phone_number: Optional[str] = None
+
+class SMSConfigRequest(BaseModel):
+    """Request model for SMS configuration"""
+    enabled: bool = False
+    sms_phone_number: Optional[str] = None
+    twilio_account_sid: Optional[str] = None
+    twilio_auth_token: Optional[str] = None
+    twilio_phone_number: Optional[str] = None
+
+class ModelConfigRequest(BaseModel):
+    """Request model for AI model configuration"""
+    llm_provider: str = "openai"
+    llm_model: str = "gpt-3.5-turbo"
+    llm_api_key: Optional[str] = None
+    llm_base_url: Optional[str] = None
+    llm_temperature: float = 0.7
+    llm_max_tokens: int = 2000
+    embedding_provider: str = "openai"
+    embedding_model: str = "text-embedding-ada-002"
+    embedding_api_key: Optional[str] = None
+    embedding_base_url: Optional[str] = None
+    embedding_dimensions: int = 1536
+
+class VectorDBConfigRequest(BaseModel):
+    """Request model for vector database configuration"""
+    provider: str = "chroma"
+    enabled: bool = True
+    chroma_host: str = "localhost"
+    chroma_port: int = 8000
+    chroma_collection_name: str = "knowledge_base"
+    chroma_persist_directory: Optional[str] = None
+    pinecone_api_key: Optional[str] = None
+    pinecone_environment: Optional[str] = None
+    pinecone_index_name: str = "knowledge-base"
+    pinecone_namespace: Optional[str] = None
+    weaviate_url: str = "http://localhost:8080"
+    weaviate_api_key: Optional[str] = None
+    weaviate_class_name: str = "KnowledgeDocument"
+    faiss_index_path: str = "./vector_store/faiss_index"
+    faiss_index_type: str = "Flat"
+
+class KnowledgeProviderConfigRequest(BaseModel):
+    """Request model for knowledge provider configuration"""
+    provider: str = "local"
+    enabled: bool = True
+    aws_access_key_id: Optional[str] = None
+    aws_secret_access_key: Optional[str] = None
+    aws_region: str = "us-east-1"
+    aws_bucket_name: Optional[str] = None
+    aws_prefix: str = "knowledge-base/"
+    azure_account_name: Optional[str] = None
+    azure_account_key: Optional[str] = None
+    azure_container_name: Optional[str] = None
+    azure_connection_string: Optional[str] = None
+    google_credentials_file: Optional[str] = None
+    google_folder_id: Optional[str] = None
+    google_service_account_email: Optional[str] = None
+    dropbox_access_token: Optional[str] = None
+    dropbox_folder_path: str = "/knowledge-base"
+
+
+@app.get("/api/config/enhanced")
+async def get_enhanced_config():
+    """Get enhanced system configuration"""
+    try:
+        config = await db_manager.get_enhanced_config()
+        
+        # If config doesn't exist or is None, create default
+        if config is None:
+            config = EnhancedSystemConfiguration()
+            # Ensure each section is properly initialized
+            if config.email is None:
+                config.email = EmailConfig()
+            if config.whatsapp is None:
+                config.whatsapp = WhatsAppConfig()
+            if config.sms is None:
+                config.sms = SMSConfig()
+            if config.model is None:
+                config.model = ModelConfig()
+            if config.vector_db is None:
+                config.vector_db = VectorDBConfig()
+            if config.knowledge_provider is None:
+                config.knowledge_provider = KnowledgeProviderConfig()
+            
+            # Save to database
+            await db_manager.update_enhanced_config(config)
+        
+        # Return the configuration
+        return config.model_dump()
+        
+    except Exception as e:
+        import traceback
+        print(f"Error in get_enhanced_config: {str(e)}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/config/{section}")
+async def get_config_section(section: str):
+    """Get specific configuration section"""
+    try:
+        if section not in ["email", "whatsapp", "sms", "model", "vector_db", "knowledge_provider"]:
+            raise HTTPException(status_code=400, detail="Invalid configuration section")
+        
+        section_config = await db_manager.get_config_section(section)
+        if not section_config:
+            # Return default configuration for the section
+            if section == "email":
+                section_config = EmailConfig(support_email="r15528850@gmail.com").model_dump()
+            elif section == "whatsapp":
+                section_config = WhatsAppConfig().model_dump()
+            elif section == "sms":
+                section_config = SMSConfig().model_dump()
+            elif section == "model":
+                section_config = ModelConfig().model_dump()
+            elif section == "vector_db":
+                section_config = VectorDBConfig().model_dump()
+            elif section == "knowledge_provider":
+                section_config = KnowledgeProviderConfig().model_dump()
+        
+        return section_config
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/config/email")
+async def update_email_config(request: EmailConfigRequest):
+    """Update email configuration"""
+    try:
+        success = await db_manager.update_config_section("email", request.model_dump())
+        if success:
+            return {"status": "success", "message": "Email configuration updated"}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to update email configuration")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/config/whatsapp")
+async def update_whatsapp_config(request: WhatsAppConfigRequest):
+    """Update WhatsApp configuration"""
+    try:
+        success = await db_manager.update_config_section("whatsapp", request.model_dump())
+        if success:
+            return {"status": "success", "message": "WhatsApp configuration updated"}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to update WhatsApp configuration")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/config/sms")
+async def update_sms_config(request: SMSConfigRequest):
+    """Update SMS configuration"""
+    try:
+        success = await db_manager.update_config_section("sms", request.model_dump())
+        if success:
+            return {"status": "success", "message": "SMS configuration updated"}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to update SMS configuration")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/config/model")
+async def update_model_config(request: ModelConfigRequest):
+    """Update AI model configuration"""
+    try:
+        success = await db_manager.update_config_section("model", request.model_dump())
+        if success:
+            return {"status": "success", "message": "Model configuration updated"}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to update model configuration")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/config/vector-db")
+async def update_vector_db_config(request: VectorDBConfigRequest):
+    """Update vector database configuration"""
+    try:
+        success = await db_manager.update_config_section("vector_db", request.model_dump())
+        if success:
+            return {"status": "success", "message": "Vector database configuration updated"}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to update vector database configuration")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/config/knowledge-provider")
+async def update_knowledge_provider_config(request: KnowledgeProviderConfigRequest):
+    """Update knowledge provider configuration"""
+    try:
+        success = await db_manager.update_config_section("knowledge_provider", request.model_dump())
+        if success:
+            return {"status": "success", "message": "Knowledge provider configuration updated"}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to update knowledge provider configuration")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 if __name__ == "__main__":
     import uvicorn

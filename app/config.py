@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     # Twilio Configuration (Optional - can be added later)
     twilio_account_sid: Optional[str] = Field(default=None, env="TWILIO_ACCOUNT_SID")
     twilio_auth_token: Optional[str] = Field(default=None, env="TWILIO_AUTH_TOKEN")
-    twilio_phone_number: Optional[str] = Field(default=None, env="TWILIO_PHONE_NUMBER")
+    twilio_phone_number: Optional[str] = Field(default="+14155238886", env="TWILIO_PHONE_NUMBER")
     twilio_whatsapp_number: str = Field(default="whatsapp:+14155238886", env="TWILIO_WHATSAPP_NUMBER")
     
     # Application Configuration
@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     # Knowledge Base Configuration
     knowledge_base_path: str = Field(default="./knowledge_base", env="KNOWLEDGE_BASE_PATH")
     embeddings_model: str = Field(default="text-embedding-3-small", env="EMBEDDINGS_MODEL")
-    llm_model: str = Field(default="gpt-4-turbo-preview", env="LLM_MODEL")
+    llm_model: str = Field(default="gpt-4o-mini", env="LLM_MODEL")
     vector_store_path: str = Field(default="./vector_store", env="VECTOR_STORE_PATH")
     
     model_config = SettingsConfigDict(

@@ -4,6 +4,9 @@ import { useState, useEffect } from 'react'
 import { ticketsAPI } from '@/lib/api'
 import { format } from 'date-fns'
 import TicketDetailsModal from '@/components/TicketDetailsModal'
+import axios from 'axios'
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 interface Message {
   role: string
@@ -143,6 +146,20 @@ export default function TicketsPage() {
             />
             <span>Auto-refresh (10s)</span>
           </label>
+          <button
+            onClick={async () => {
+              try {
+                const response = await axios.post(`${API_URL}/api/whatsapp/check-messages`)
+                alert(`✓ Found and processed ${response.data.messages_found} WhatsApp message(s)`)
+                loadTickets() // Refresh tickets to show new ones
+              } catch (error: any) {
+                alert(`Failed to check WhatsApp messages: ${error.response?.data?.detail || error.message}`)
+              }
+            }}
+            className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2"
+          >
+            📱 Check WhatsApp
+          </button>
           <button
             onClick={loadTickets}
             className="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"

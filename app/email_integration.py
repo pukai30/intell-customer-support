@@ -214,21 +214,40 @@ class EmailIntegration:
                     channel="email"
                 )
                 
-                if assignment_result and assignment_result["assigned"]:
+                if assignment_result and assignment_result.get("assigned"):
                     print(f"✓ Email from {customer_email} auto-assigned to {assignment_result['agent_name']}")
                     print(f"  → Agent: {assignment_result['agent_email']}")
-                    print(f"  → Skills matched: {assignment_result.get('skills_matched', [])}")
-                    print(f"  → Current load: {assignment_result.get('current_load', 0)} tickets")
+                    print(f"  → Skills: {assignment_result.get('agent_skills', [])}")
+                    print(f"  → Current load: {assignment_result.get('new_load', 0)} tickets")
+                    
+                    # Notify customer that their complaint was received
+                    ticket = await db_manager.get_ticket(ticket_id)
+                    from app.notification_handler import notification_handler
+                    await notification_handler.notify_human_agent_required(
+                        ticket,
+                        "An agent has been assigned to your complaint and will respond soon"
+                    )
                 else:
-                    # No agent available - mark for manual review
+                    # No agent available - mark for manual review (human assignment)
+                    print(f"⚠ No agent available for auto-assignment - marking for human review")
                     await db_manager.update_ticket(ticket_id, {
                         "status": "pending",
                         "priority": "high",
                         "requires_human": True
                     })
-                    reason = assignment_result.get("reason", "no agent available") if assignment_result else "no agent available"
-                    print(f"⚠ Email from {customer_email} requires human review")
-                    print(f"  → Reason: {reason}")
+                    
+                    # Notify customer that their complaint was received
+                    ticket = await db_manager.get_ticket(ticket_id)
+                    from app.notification_handler import notification_handler
+                    await notification_handler.notify_human_agent_required(
+                        ticket,
+                        "Your complaint has been received and is being reviewed by our team. A support agent will be in touch shortly."
+                    )
+                    
+                    print(f"✓ Ticket {ticket_id} marked for manual assignment")
+                    print(f"  → Status: pending")
+                    print(f"  → Priority: high")
+                    print(f"  → Requires human: True")
         
         except Exception as e:
             print(f"✗ Error processing email: {e}")
